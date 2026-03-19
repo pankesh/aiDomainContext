@@ -4,6 +4,7 @@ from fastapi import FastAPI
 import aidomaincontext.connectors  # noqa: F401 — registers all connector implementations
 from aidomaincontext.api.routes_admin import router as admin_router
 from aidomaincontext.api.routes_connectors import router as connectors_router
+from aidomaincontext.api.routes_oauth import router as oauth_router
 from aidomaincontext.api.routes_search import router as search_router
 from aidomaincontext.api.routes_upload import router as upload_router
 from aidomaincontext.api.routes_webhooks import router as webhooks_router
@@ -28,3 +29,4 @@ app.include_router(upload_router)
 app.include_router(admin_router)
 app.include_router(connectors_router)
 app.include_router(webhooks_router)
+app.include_router(oauth_router)

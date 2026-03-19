@@ -125,6 +125,58 @@ src/aidomaincontext/
 └── sync/          # Background worker + scheduler (arq + APScheduler)
 ```
 
+## Gmail Setup
+
+Gmail uses OAuth 2.0 — credentials are obtained via a browser consent flow rather than a static token.
+
+### 1. Create a Google Cloud project and enable the API
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services** → **Library**
+2. Search for **Gmail API** and click **Enable**
+
+### 2. Configure the OAuth consent screen
+
+1. **APIs & Services** → **OAuth consent screen** → **Get Started**
+2. Fill in the app name, set **Audience** to **External**
+3. Add the scope `https://www.googleapis.com/auth/gmail.readonly`
+
+### 3. Create OAuth credentials
+
+1. **APIs & Services** → **Credentials** → **Create Credentials** → **OAuth client ID**
+2. Application type: **Web application**
+3. Add an **Authorized redirect URI**: `http://localhost:8000/api/v1/oauth/google/callback`
+4. Copy the **Client ID** and **Client Secret**
+
+### 4. Add credentials to `.env`
+
+```bash
+GOOGLE_OAUTH_CLIENT_ID=<your_client_id>
+GOOGLE_OAUTH_CLIENT_SECRET=<your_client_secret>
+OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/oauth/google/callback
+```
+
+### 5. Connect a Gmail account
+
+With the server running, visit in your browser:
+
+```
+http://localhost:8000/api/v1/oauth/google/authorize?connector_name=My+Gmail
+```
+
+Complete the Google consent screen. You will be redirected back and receive a JSON response containing the new `connector_id`.
+
+### 6. Trigger a sync
+
+```bash
+# Full sync (first run)
+curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=full"
+
+# Incremental sync (subsequent runs — uses Gmail History API)
+curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=incremental"
+```
+
+---
+
 ## Full Reset (local dev)
 
 Wipes the database and starts fresh:

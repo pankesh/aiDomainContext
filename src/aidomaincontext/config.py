@@ -34,5 +34,13 @@ class Settings(BaseSettings):
     rerank_top_k: int = 5
     context_token_budget: int = 8000
 
+    # Chat sessions (Redis-backed)
+    chat_session_ttl_seconds: int = 7200  # 2 hours sliding TTL
+
+    # Google OAuth (Gmail connector)
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = ""
+    oauth_redirect_uri: str = "http://localhost:8000/api/v1/oauth/google/callback"
+
 
 settings = Settings()

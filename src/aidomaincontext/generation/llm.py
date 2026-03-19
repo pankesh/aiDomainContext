@@ -2,7 +2,7 @@ import structlog
 from anthropic import AsyncAnthropic
 
 from aidomaincontext.config import settings
-from aidomaincontext.schemas.search import ChatResponse, Citation
+from aidomaincontext.schemas.search import Citation, Message
 
 logger = structlog.get_logger()
 
@@ -32,25 +32,31 @@ def _build_context(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-async def generate_answer(query: str, chunks: list[dict]) -> ChatResponse:
-    """Generate a cited answer using Claude given retrieved chunks."""
+async def generate_answer(
+    query: str, chunks: list[dict], history: list[Message] | None = None
+) -> tuple[str, list[Citation]]:
+    """Generate a cited answer using Claude given retrieved chunks and optional conversation history."""
     client = _get_client()
     context = _build_context(chunks)
 
-    user_message = f"""Context:
+    current_user_message = f"""Context:
 {context}
 
 Question: {query}
 
 Answer the question based on the context above. Cite sources using [Source N] notation."""
 
-    logger.info("generating_answer", query=query, context_chunks=len(chunks))
+    # Build messages array: prior turns first, then current query with RAG context
+    messages: list[dict] = [{"role": m.role, "content": m.content} for m in (history or [])]
+    messages.append({"role": "user", "content": current_user_message})
+
+    logger.info("generating_answer", query=query, context_chunks=len(chunks), history_turns=len(history or []))
 
     response = await client.messages.create(
         model=settings.generation_model,
         max_tokens=2048,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+        messages=messages,
     )
 
     answer = response.content[0].text
@@ -64,7 +70,7 @@ Answer the question based on the context above. Cite sources using [Source N] no
                 chunk_content=chunk["content"][:200],
             ))
 
-    return ChatResponse(answer=answer, citations=citations, query=query)
+    return answer, citations
 
 
 async def generate_answer_stream(query: str, chunks: list[dict]):

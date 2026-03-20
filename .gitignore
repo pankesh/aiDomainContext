@@ -16,3 +16,4 @@ venv/
 *.sqlite3
 .coverage
 htmlcov/
+uv.lock

@@ -133,7 +133,7 @@ async def handle_github_webhook(
     logger.info(
         "github_webhook_received",
         connector_id=str(connector.id),
-        event=x_github_event,
+        github_event=x_github_event,
         document_count=len(documents),
     )
     return {"ok": True}

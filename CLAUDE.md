@@ -51,6 +51,12 @@ uv run alembic revision --autogenerate -m "description"
   - `models/` — SQLAlchemy ORM models
   - `schemas/` — Pydantic request/response models
 
+## Development Workflow
+
+Before making any changes:
+1. **Always rebase onto `main` first** — `git fetch && git rebase origin/main` — to avoid merge conflicts on the PR.
+2. **Run all tests before committing** — `uv run pytest tests/unit/ -q` — all must pass before any commit or PR is opened.
+
 ## Key Design Decisions
 
 ### Chat sessions — Redis-backed (Option B)

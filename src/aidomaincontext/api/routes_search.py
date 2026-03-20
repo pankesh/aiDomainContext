@@ -84,7 +84,7 @@ async def search(request: SearchRequest, session: AsyncSession = Depends(get_ses
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, session: AsyncSession = Depends(get_session)):
-    session_id = request.session_id or str(uuid.uuid4())
+    session_id = str(request.session_id) if request.session_id else str(uuid.uuid4())
 
     redis = await _get_redis()
     try:

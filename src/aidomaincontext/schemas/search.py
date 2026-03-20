@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -23,7 +24,7 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     query: str
     top_k: int = 5
-    session_id: str | None = None
+    session_id: UUID | None = None
 
 
 class Citation(BaseModel):

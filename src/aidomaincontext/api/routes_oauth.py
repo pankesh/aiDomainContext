@@ -129,7 +129,7 @@ async def google_callback(
         await loop.run_in_executor(None, functools.partial(flow.fetch_token, code=code))
     except Exception as exc:
         logger.error("oauth.google.token_exchange_failed", error=str(exc))
-        raise HTTPException(status_code=400, detail=f"Token exchange failed: {exc}") from exc
+        raise HTTPException(status_code=400, detail="Token exchange failed.") from exc
 
     credentials = flow.credentials
     access_token: str = credentials.token

@@ -1,7 +1,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from aidomaincontext.schemas.documents import ChunkResponse
 
@@ -25,6 +25,13 @@ class ChatRequest(BaseModel):
     query: str
     top_k: int = 5
     session_id: UUID | None = None
+
+    @field_validator("session_id", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
 
 
 class Citation(BaseModel):

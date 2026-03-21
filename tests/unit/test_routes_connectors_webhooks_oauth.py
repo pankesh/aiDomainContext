@@ -829,6 +829,83 @@ class TestGoogleAuthorize:
         stored = json.loads(stored_values[0])
         assert stored["connector_name"] == "Work Gmail"
 
+    def test_authorize_stores_connector_type_google_drive_in_redis(self, client, mock_session):
+        redis_mock = _make_redis_mock()
+        flow_mock = _make_flow_mock()
+
+        stored_values: list[str] = []
+
+        async def capture_setex(key, ttl, value):
+            stored_values.append(value)
+
+        redis_mock.setex = AsyncMock(side_effect=capture_setex)
+
+        with (
+            patch("aidomaincontext.api.routes_oauth._get_redis", AsyncMock(return_value=redis_mock)),
+            patch("aidomaincontext.api.routes_oauth._build_flow", return_value=flow_mock),
+            patch("aidomaincontext.api.routes_oauth.settings") as mock_settings,
+        ):
+            mock_settings.google_oauth_client_id = "client_id"
+            mock_settings.google_oauth_client_secret = "secret"
+            mock_settings.oauth_redirect_uri = "http://localhost/callback"
+            mock_settings.redis_url = "redis://localhost:6379"
+
+            resp = client.get(
+                "/api/v1/oauth/google/authorize?connector_type=google_drive&connector_name=My+Drive",
+                follow_redirects=False,
+            )
+
+        assert resp.status_code == 307
+        assert len(stored_values) == 1
+        stored = json.loads(stored_values[0])
+        assert stored["connector_type"] == "google_drive"
+        assert stored["connector_name"] == "My Drive"
+
+    def test_authorize_defaults_connector_type_to_gmail(self, client, mock_session):
+        redis_mock = _make_redis_mock()
+        flow_mock = _make_flow_mock()
+
+        stored_values: list[str] = []
+
+        async def capture_setex(key, ttl, value):
+            stored_values.append(value)
+
+        redis_mock.setex = AsyncMock(side_effect=capture_setex)
+
+        with (
+            patch("aidomaincontext.api.routes_oauth._get_redis", AsyncMock(return_value=redis_mock)),
+            patch("aidomaincontext.api.routes_oauth._build_flow", return_value=flow_mock),
+            patch("aidomaincontext.api.routes_oauth.settings") as mock_settings,
+        ):
+            mock_settings.google_oauth_client_id = "client_id"
+            mock_settings.google_oauth_client_secret = "secret"
+            mock_settings.oauth_redirect_uri = "http://localhost/callback"
+            mock_settings.redis_url = "redis://localhost:6379"
+
+            resp = client.get(
+                "/api/v1/oauth/google/authorize",
+                follow_redirects=False,
+            )
+
+        assert resp.status_code == 307
+        stored = json.loads(stored_values[0])
+        assert stored["connector_type"] == "gmail"
+
+    def test_authorize_unknown_connector_type_returns_400(self, client, mock_session):
+        with patch("aidomaincontext.api.routes_oauth.settings") as mock_settings:
+            mock_settings.google_oauth_client_id = "client_id_123"
+            mock_settings.google_oauth_client_secret = "secret"
+            mock_settings.oauth_redirect_uri = "http://localhost/callback"
+            mock_settings.redis_url = "redis://localhost:6379"
+
+            resp = client.get(
+                "/api/v1/oauth/google/authorize?connector_type=unknown_type",
+                follow_redirects=False,
+            )
+
+        assert resp.status_code == 400
+        assert "Unsupported connector_type" in resp.json()["detail"]
+
 
 class TestGoogleCallback:
     def _default_patches(
@@ -849,7 +926,7 @@ class TestGoogleCallback:
         if redis_mock is None:
             redis_mock = _make_redis_mock()
         if stored_state is None:
-            stored_state = {"connector_name": "Test Gmail", "code_verifier": None}
+            stored_state = {"connector_name": "Test Gmail", "connector_type": "gmail", "code_verifier": None}
         if flow_mock is None:
             flow_mock = _make_flow_mock()
         if encrypt_return is None:
@@ -1057,3 +1134,147 @@ class TestGoogleCallback:
         assert cfg["refresh_token"] == "ref_tok"
         assert cfg["user_email"] == "tester@domain.com"
         assert "scopes" in cfg
+
+    def test_callback_creates_google_drive_connector_type(self, client, mock_session):
+        import httpx as _httpx
+
+        connector = _make_connector(connector_type="google_drive", name="My Drive")
+        mock_session.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "id", connector.id))
+
+        redis_mock = _make_redis_mock()
+        stored = {"connector_name": "My Drive", "connector_type": "google_drive", "code_verifier": None}
+        redis_mock.get = AsyncMock(return_value=json.dumps(stored))
+
+        flow_mock = _make_flow_mock(refresh_token="ref_drive", access_token="acc_drive")
+
+        userinfo_resp = _httpx.Response(
+            200,
+            json={"email": "drive_user@example.com"},
+            request=_httpx.Request("GET", "https://www.googleapis.com/oauth2/v2/userinfo"),
+        )
+
+        mock_async_client = AsyncMock()
+        mock_async_client.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_async_client.__aexit__ = AsyncMock(return_value=False)
+        mock_async_client.get = AsyncMock(return_value=userinfo_resp)
+
+        created_connectors: list = []
+
+        def capture_add(obj):
+            obj.id = connector.id
+            obj.created_at = connector.created_at
+            obj.updated_at = connector.updated_at
+            created_connectors.append(obj)
+
+        mock_session.add = MagicMock(side_effect=capture_add)
+
+        with (
+            patch("aidomaincontext.api.routes_oauth._get_redis", AsyncMock(return_value=redis_mock)),
+            patch("aidomaincontext.api.routes_oauth._build_flow", return_value=flow_mock),
+            patch("httpx.AsyncClient", return_value=mock_async_client),
+            patch("aidomaincontext.api.routes_oauth.encrypt_config", return_value={"_e": "enc"}),
+        ):
+            resp = client.get(
+                "/api/v1/oauth/google/callback",
+                params={"code": "code_drv", "state": "state_drv"},
+            )
+
+        assert resp.status_code == 201
+        assert len(created_connectors) == 1
+        assert created_connectors[0].connector_type == "google_drive"
+        data = resp.json()
+        assert data["connector_type"] == "google_drive"
+
+    def test_callback_defaults_to_gmail_when_connector_type_missing(self, client, mock_session):
+        import httpx as _httpx
+
+        connector = _make_connector(connector_type="gmail", name="Old Gmail")
+        mock_session.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "id", connector.id))
+
+        redis_mock = _make_redis_mock()
+        # Simulate old-style state blob without connector_type key
+        stored = {"connector_name": "Old Gmail", "code_verifier": None}
+        redis_mock.get = AsyncMock(return_value=json.dumps(stored))
+
+        flow_mock = _make_flow_mock(refresh_token="ref_old", access_token="acc_old")
+
+        userinfo_resp = _httpx.Response(
+            200,
+            json={"email": "old@example.com"},
+            request=_httpx.Request("GET", "https://www.googleapis.com/oauth2/v2/userinfo"),
+        )
+
+        mock_async_client = AsyncMock()
+        mock_async_client.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_async_client.__aexit__ = AsyncMock(return_value=False)
+        mock_async_client.get = AsyncMock(return_value=userinfo_resp)
+
+        created_connectors: list = []
+
+        def capture_add(obj):
+            obj.id = connector.id
+            obj.created_at = connector.created_at
+            obj.updated_at = connector.updated_at
+            created_connectors.append(obj)
+
+        mock_session.add = MagicMock(side_effect=capture_add)
+
+        with (
+            patch("aidomaincontext.api.routes_oauth._get_redis", AsyncMock(return_value=redis_mock)),
+            patch("aidomaincontext.api.routes_oauth._build_flow", return_value=flow_mock),
+            patch("httpx.AsyncClient", return_value=mock_async_client),
+            patch("aidomaincontext.api.routes_oauth.encrypt_config", return_value={"_e": "enc"}),
+        ):
+            resp = client.get(
+                "/api/v1/oauth/google/callback",
+                params={"code": "code_old", "state": "state_old"},
+            )
+
+        assert resp.status_code == 201
+        assert created_connectors[0].connector_type == "gmail"
+
+    def test_callback_response_includes_connector_type(self, client, mock_session):
+        import httpx as _httpx
+
+        connector = _make_connector(connector_type="gmail", name="Test Gmail")
+        mock_session.refresh = AsyncMock(side_effect=lambda obj: setattr(obj, "id", connector.id))
+
+        redis_mock = _make_redis_mock()
+        stored = {"connector_name": "Test Gmail", "connector_type": "gmail", "code_verifier": None}
+        redis_mock.get = AsyncMock(return_value=json.dumps(stored))
+
+        flow_mock = _make_flow_mock(refresh_token="ref_x", access_token="acc_x")
+
+        userinfo_resp = _httpx.Response(
+            200,
+            json={"email": "resp@example.com"},
+            request=_httpx.Request("GET", "https://www.googleapis.com/oauth2/v2/userinfo"),
+        )
+
+        mock_async_client = AsyncMock()
+        mock_async_client.__aenter__ = AsyncMock(return_value=mock_async_client)
+        mock_async_client.__aexit__ = AsyncMock(return_value=False)
+        mock_async_client.get = AsyncMock(return_value=userinfo_resp)
+
+        def capture_add(obj):
+            obj.id = connector.id
+            obj.created_at = connector.created_at
+            obj.updated_at = connector.updated_at
+
+        mock_session.add = MagicMock(side_effect=capture_add)
+
+        with (
+            patch("aidomaincontext.api.routes_oauth._get_redis", AsyncMock(return_value=redis_mock)),
+            patch("aidomaincontext.api.routes_oauth._build_flow", return_value=flow_mock),
+            patch("httpx.AsyncClient", return_value=mock_async_client),
+            patch("aidomaincontext.api.routes_oauth.encrypt_config", return_value={"_e": "enc"}),
+        ):
+            resp = client.get(
+                "/api/v1/oauth/google/callback",
+                params={"code": "code_r", "state": "state_r"},
+            )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert "connector_type" in data
+        assert data["connector_type"] == "gmail"

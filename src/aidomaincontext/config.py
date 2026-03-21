@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
     encryption_key: str = "4B4hk77zpRUvSIp6-LOWSaROegsHjZ0H74S9PsCldwM="
 
+    # Hugging Face (optional — suppresses rate-limit warnings on model downloads)
+    hf_token: str = ""
+
     # Google (embeddings — optional, only needed if using Gemini embedder)
     google_api_key: str = ""
     embedding_model: str = "BAAI/bge-base-en-v1.5"

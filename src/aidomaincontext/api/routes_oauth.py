@@ -23,15 +23,23 @@ logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/v1/oauth", tags=["oauth"])
 
-_GOOGLE_SCOPES = [
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "openid",
-]
+_SCOPES_BY_CONNECTOR: dict[str, list[str]] = {
+    "gmail": [
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "openid",
+    ],
+    "google_drive": [
+        "https://www.googleapis.com/auth/drive.readonly",
+        "https://www.googleapis.com/auth/userinfo.email",
+        "openid",
+    ],
+}
+_SUPPORTED_CONNECTOR_TYPES = frozenset(_SCOPES_BY_CONNECTOR)
 _OAUTH_STATE_TTL = 600  # 10 minutes
 
 
-def _build_flow(*, state: str | None = None) -> Flow:
+def _build_flow(*, scopes: list[str], state: str | None = None) -> Flow:
     """Construct a google_auth_oauthlib Flow from application settings."""
     client_config = {
         "web": {
@@ -42,7 +50,7 @@ def _build_flow(*, state: str | None = None) -> Flow:
             "token_uri": "https://oauth2.googleapis.com/token",
         }
     }
-    kwargs: dict = {"scopes": _GOOGLE_SCOPES, "redirect_uri": settings.oauth_redirect_uri}
+    kwargs: dict = {"scopes": scopes, "redirect_uri": settings.oauth_redirect_uri}
     if state is not None:
         kwargs["state"] = state
     return Flow.from_client_config(client_config, **kwargs)
@@ -63,6 +71,7 @@ async def _get_redis():
 @router.get("/google/authorize")
 async def google_authorize(
     connector_name: str = Query(default="My Gmail"),
+    connector_type: str = Query(default="gmail"),
 ):
     """Start the Google OAuth 2.0 consent flow.
 
@@ -75,9 +84,16 @@ async def google_authorize(
             detail="GOOGLE_OAUTH_CLIENT_ID is not configured on this server.",
         )
 
+    if connector_type not in _SUPPORTED_CONNECTOR_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported connector_type '{connector_type}'.",
+        )
+
+    scopes = _SCOPES_BY_CONNECTOR[connector_type]
     state = secrets.token_urlsafe(32)
 
-    flow = _build_flow()
+    flow = _build_flow(scopes=scopes)
     auth_url, _ = flow.authorization_url(
         state=state,
         access_type="offline",
@@ -85,14 +101,18 @@ async def google_authorize(
     )
 
     # Persist state + code_verifier (PKCE) so the callback can complete the exchange
-    stored = json.dumps({"connector_name": connector_name, "code_verifier": flow.code_verifier})
+    stored = json.dumps({
+        "connector_name": connector_name,
+        "connector_type": connector_type,
+        "code_verifier": flow.code_verifier,
+    })
     redis = await _get_redis()
     try:
         await redis.setex(f"oauth:state:{state}", _OAUTH_STATE_TTL, stored)
     finally:
         await redis.aclose()
 
-    logger.info("oauth.google.authorize_redirect", connector_name=connector_name)
+    logger.info("oauth.google.authorize_redirect", connector_name=connector_name, connector_type=connector_type)
     return RedirectResponse(url=auth_url)
 
 
@@ -115,13 +135,15 @@ async def google_callback(
             raise HTTPException(status_code=400, detail="Invalid or expired OAuth state.")
         stored = json.loads(raw)
         connector_name: str = stored["connector_name"]
+        connector_type: str = stored.get("connector_type", "gmail")
         code_verifier: str | None = stored.get("code_verifier")
         await redis.delete(f"oauth:state:{state}")
     finally:
         await redis.aclose()
 
     # --- Token exchange (synchronous library — run in thread pool) ---
-    flow = _build_flow(state=state)
+    scopes = _SCOPES_BY_CONNECTOR.get(connector_type, _SCOPES_BY_CONNECTOR["gmail"])
+    flow = _build_flow(scopes=scopes, state=state)
     if code_verifier:
         flow.code_verifier = code_verifier
     try:
@@ -169,11 +191,11 @@ async def google_callback(
         "refresh_token": refresh_token,
         "token_expiry": token_expiry,
         "user_email": user_email,
-        "scopes": list(credentials.scopes or _GOOGLE_SCOPES),
+        "scopes": list(credentials.scopes or scopes),
     }
     connector = Connector(
         name=connector_name,
-        connector_type="gmail",
+        connector_type=connector_type,
         config_encrypted=encrypt_config(config),
     )
     session.add(connector)
@@ -183,13 +205,15 @@ async def google_callback(
     logger.info(
         "oauth.google.connector_created",
         connector_id=str(connector.id),
+        connector_type=connector_type,
         user_email=user_email,
     )
     return JSONResponse(
         status_code=201,
         content={
             "connector_id": str(connector.id),
+            "connector_type": connector_type,
             "user_email": user_email,
-            "message": f"Gmail connector '{connector_name}' created successfully.",
+            "message": f"{connector_type} connector '{connector_name}' created successfully.",
         },
     )

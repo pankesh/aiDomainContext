@@ -1,6 +1,6 @@
 # aiDomainContext
 
-Enterprise RAG system that ingests data from multiple sources (Slack, GitHub, file uploads) into a unified vector store, enabling semantic search and AI-powered Q&A across all company knowledge.
+Enterprise RAG system that ingests data from multiple sources (Slack, GitHub, Gmail, Google Drive, file uploads) into a unified vector store, enabling semantic search and AI-powered Q&A across all company knowledge.
 
 ## Requirements
 
@@ -116,7 +116,7 @@ GENERATION_MODEL=claude-sonnet-4-6
 ```
 src/aidomaincontext/
 ├── api/           # FastAPI route handlers
-├── connectors/    # Data source connectors (Slack, GitHub, file upload)
+├── connectors/    # Data source connectors (Slack, GitHub, Gmail, Google Drive, file upload)
 ├── ingestion/     # Pipeline: parse → chunk → embed → upsert
 ├── retrieval/     # Hybrid search (vector + BM25 + RRF fusion)
 ├── generation/    # Claude LLM wrapper with citation support
@@ -125,20 +125,27 @@ src/aidomaincontext/
 └── sync/          # Background worker + scheduler (arq + APScheduler)
 ```
 
-## Gmail Setup
+## Google Connector Setup (Gmail and Drive)
 
-Gmail uses OAuth 2.0 — credentials are obtained via a browser consent flow rather than a static token.
+Gmail and Google Drive both use Google OAuth 2.0. They share the same OAuth credentials and consent screen — the only difference is which scopes are requested.
 
-### 1. Create a Google Cloud project and enable the API
+### 1. Create a Google Cloud project and enable the APIs
 
 1. Go to [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services** → **Library**
 2. Search for **Gmail API** and click **Enable**
+3. Search for **Google Drive API** and click **Enable**
+
+> **Important:** Both APIs must be enabled even if you only plan to use one connector. Missing either will cause a `403 Forbidden` error when syncing.
 
 ### 2. Configure the OAuth consent screen
 
 1. **APIs & Services** → **OAuth consent screen** → **Get Started**
 2. Fill in the app name, set **Audience** to **External**
-3. Add the scope `https://www.googleapis.com/auth/gmail.readonly`
+3. Add the following scopes:
+   - `https://www.googleapis.com/auth/gmail.readonly`
+   - `https://www.googleapis.com/auth/drive.readonly`
+   - `https://www.googleapis.com/auth/userinfo.email`
+   - `openid`
 
 ### 3. Create OAuth credentials
 
@@ -155,15 +162,21 @@ GOOGLE_OAUTH_CLIENT_SECRET=<your_client_secret>
 OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/oauth/google/callback
 ```
 
-### 5. Connect a Gmail account
+### 5. Connect an account
 
-With the server running, visit in your browser:
+The OAuth flow creates the connector automatically — no separate API call needed. Visit in your browser:
 
+**Gmail:**
 ```
 http://localhost:8000/api/v1/oauth/google/authorize?connector_name=My+Gmail
 ```
 
-Complete the Google consent screen. You will be redirected back and receive a JSON response containing the new `connector_id`.
+**Google Drive:**
+```
+http://localhost:8000/api/v1/oauth/google/authorize?connector_type=google_drive&connector_name=My+Drive
+```
+
+Complete the Google consent screen. You will be redirected back and receive a `201` JSON response containing the `connector_id`.
 
 ### 6. Trigger a sync
 
@@ -171,7 +184,8 @@ Complete the Google consent screen. You will be redirected back and receive a JS
 # Full sync (first run)
 curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=full"
 
-# Incremental sync (subsequent runs — uses Gmail History API)
+# Incremental sync (subsequent runs)
+# Gmail uses the History API; Drive uses the Changes API
 curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=incremental"
 ```
 

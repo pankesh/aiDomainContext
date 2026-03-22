@@ -30,11 +30,11 @@ async def vector_search(
                    1 - (c.embedding <=> CAST(:embedding AS vector)) AS score
             FROM chunks c
             JOIN documents d ON d.id = c.document_id
-            WHERE (:connector_id IS NULL OR d.connector_id = CAST(:connector_id AS uuid))
-              AND (:source_type   IS NULL OR d.source_type  = :source_type)
-              AND (:author        IS NULL OR d.author        = :author)
-              AND (:date_from     IS NULL OR d.created_at   >= :date_from)
-              AND (:date_to       IS NULL OR d.created_at   <= :date_to)
+            WHERE (CAST(:connector_id AS uuid) IS NULL OR d.connector_id = CAST(:connector_id AS uuid))
+              AND (CAST(:source_type AS text) IS NULL OR d.source_type  = CAST(:source_type AS text))
+              AND (CAST(:author AS text)      IS NULL OR d.author        = CAST(:author AS text))
+              AND (CAST(:date_from AS timestamptz) IS NULL OR d.created_at >= CAST(:date_from AS timestamptz))
+              AND (CAST(:date_to   AS timestamptz) IS NULL OR d.created_at <= CAST(:date_to   AS timestamptz))
             ORDER BY c.embedding <=> CAST(:embedding AS vector)
             LIMIT :top_k
         """),
@@ -70,11 +70,11 @@ async def bm25_search(
             FROM chunks c
             JOIN documents d ON d.id = c.document_id
             WHERE to_tsvector('english', c.content) @@ plainto_tsquery('english', :query)
-              AND (:connector_id IS NULL OR d.connector_id = CAST(:connector_id AS uuid))
-              AND (:source_type   IS NULL OR d.source_type  = :source_type)
-              AND (:author        IS NULL OR d.author        = :author)
-              AND (:date_from     IS NULL OR d.created_at   >= :date_from)
-              AND (:date_to       IS NULL OR d.created_at   <= :date_to)
+              AND (CAST(:connector_id AS uuid) IS NULL OR d.connector_id = CAST(:connector_id AS uuid))
+              AND (CAST(:source_type AS text) IS NULL OR d.source_type  = CAST(:source_type AS text))
+              AND (CAST(:author AS text)      IS NULL OR d.author        = CAST(:author AS text))
+              AND (CAST(:date_from AS timestamptz) IS NULL OR d.created_at >= CAST(:date_from AS timestamptz))
+              AND (CAST(:date_to   AS timestamptz) IS NULL OR d.created_at <= CAST(:date_to   AS timestamptz))
             ORDER BY score DESC
             LIMIT :top_k
         """),

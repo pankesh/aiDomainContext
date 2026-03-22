@@ -1,4 +1,6 @@
 import uuid
+from datetime import datetime
+from uuid import UUID
 
 import structlog
 from sqlalchemy import text
@@ -11,7 +13,15 @@ logger = structlog.get_logger()
 
 
 async def vector_search(
-    session: AsyncSession, query_embedding: list[float], top_k: int
+    session: AsyncSession,
+    query_embedding: list[float],
+    top_k: int,
+    *,
+    connector_id: UUID | None = None,
+    source_type: str | None = None,
+    author: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
 ) -> list[dict]:
     """Cosine similarity search via pgvector."""
     result = await session.execute(
@@ -19,26 +29,64 @@ async def vector_search(
             SELECT c.id, c.document_id, c.chunk_index, c.content, c.token_count,
                    1 - (c.embedding <=> CAST(:embedding AS vector)) AS score
             FROM chunks c
+            JOIN documents d ON d.id = c.document_id
+            WHERE (:connector_id IS NULL OR d.connector_id = CAST(:connector_id AS uuid))
+              AND (:source_type   IS NULL OR d.source_type  = :source_type)
+              AND (:author        IS NULL OR d.author        = :author)
+              AND (:date_from     IS NULL OR d.created_at   >= :date_from)
+              AND (:date_to       IS NULL OR d.created_at   <= :date_to)
             ORDER BY c.embedding <=> CAST(:embedding AS vector)
             LIMIT :top_k
         """),
-        {"embedding": str(query_embedding), "top_k": top_k},
+        {
+            "embedding": str(query_embedding),
+            "top_k": top_k,
+            "connector_id": str(connector_id) if connector_id else None,
+            "source_type": source_type,
+            "author": author,
+            "date_from": date_from,
+            "date_to": date_to,
+        },
     )
     return [dict(row._mapping) for row in result]
 
 
-async def bm25_search(session: AsyncSession, query: str, top_k: int) -> list[dict]:
+async def bm25_search(
+    session: AsyncSession,
+    query: str,
+    top_k: int,
+    *,
+    connector_id: UUID | None = None,
+    source_type: str | None = None,
+    author: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> list[dict]:
     """Full-text search using PostgreSQL tsvector/tsquery."""
     result = await session.execute(
         text("""
             SELECT c.id, c.document_id, c.chunk_index, c.content, c.token_count,
                    ts_rank_cd(to_tsvector('english', c.content), plainto_tsquery('english', :query)) AS score
             FROM chunks c
+            JOIN documents d ON d.id = c.document_id
             WHERE to_tsvector('english', c.content) @@ plainto_tsquery('english', :query)
+              AND (:connector_id IS NULL OR d.connector_id = CAST(:connector_id AS uuid))
+              AND (:source_type   IS NULL OR d.source_type  = :source_type)
+              AND (:author        IS NULL OR d.author        = :author)
+              AND (:date_from     IS NULL OR d.created_at   >= :date_from)
+              AND (:date_to       IS NULL OR d.created_at   <= :date_to)
             ORDER BY score DESC
             LIMIT :top_k
         """),
-        {"query": query, "top_k": top_k},
+        {
+            "query": query,
+            "top_k": top_k,
+            "connector_id": str(connector_id) if connector_id else None,
+            "source_type": source_type,
+            "author": author,
+            "date_from": date_from,
+            "date_to": date_to,
+        },
     )
     return [dict(row._mapping) for row in result]
 
@@ -65,14 +113,32 @@ def reciprocal_rank_fusion(
     return fused
 
 
-async def hybrid_search(session: AsyncSession, query: str, top_k: int | None = None) -> list[dict]:
+async def hybrid_search(
+    session: AsyncSession,
+    query: str,
+    top_k: int | None = None,
+    *,
+    connector_id: UUID | None = None,
+    source_type: str | None = None,
+    author: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> list[dict]:
     """Run vector + BM25 search, fuse with RRF, return top results."""
     search_k = top_k or settings.search_top_k
 
     query_embedding = await embed_query(query)
 
-    vector_results = await vector_search(session, query_embedding, search_k)
-    bm25_results = await bm25_search(session, query, search_k)
+    filter_kwargs = {
+        "connector_id": connector_id,
+        "source_type": source_type,
+        "author": author,
+        "date_from": date_from,
+        "date_to": date_to,
+    }
+
+    vector_results = await vector_search(session, query_embedding, search_k, **filter_kwargs)
+    bm25_results = await bm25_search(session, query, search_k, **filter_kwargs)
 
     logger.info(
         "hybrid_search",

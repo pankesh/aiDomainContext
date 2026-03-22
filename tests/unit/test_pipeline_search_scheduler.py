@@ -403,8 +403,14 @@ async def test_hybrid_search_fuses_results_and_truncates_to_rerank_top_k():
         results = await hs_module.hybrid_search(session, "my query", top_k=10)
 
     mock_embed_query.assert_awaited_once_with("my query")
-    mock_vs.assert_awaited_once_with(session, fake_embedding, 10)
-    mock_bm25.assert_awaited_once_with(session, "my query", 10)
+    mock_vs.assert_awaited_once_with(
+        session, fake_embedding, 10,
+        connector_id=None, source_type=None, author=None, date_from=None, date_to=None,
+    )
+    mock_bm25.assert_awaited_once_with(
+        session, "my query", 10,
+        connector_id=None, source_type=None, author=None, date_from=None, date_to=None,
+    )
 
     # Result must be truncated to rerank_top_k=2
     assert len(results) <= 2

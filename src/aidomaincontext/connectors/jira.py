@@ -11,6 +11,7 @@ import httpx
 import structlog
 
 from aidomaincontext.connectors.base import register_connector
+from aidomaincontext.connectors.retry import with_backoff
 from aidomaincontext.schemas.documents import DocumentBase
 
 logger = structlog.get_logger()
@@ -143,7 +144,9 @@ class JiraConnector:
                         "issuetype,project,assignee,reporter,renderedFields"
                     ),
                 }
-                resp = await client.get(f"{base}/rest/api/3/search", params=params)
+                resp = await with_backoff(
+                    lambda p=params: client.get(f"{base}/rest/api/3/search", params=p)
+                )
                 resp.raise_for_status()
                 data = resp.json()
 

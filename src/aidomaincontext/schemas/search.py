@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
@@ -9,6 +10,11 @@ from aidomaincontext.schemas.documents import ChunkResponse
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 5
+    connector_id: UUID | None = None
+    source_type: str | None = None
+    author: str | None = None
+    date_from: datetime | None = None
+    date_to: datetime | None = None
 
 
 class SearchResult(BaseModel):

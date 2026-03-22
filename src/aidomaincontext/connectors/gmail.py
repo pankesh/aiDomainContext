@@ -12,6 +12,7 @@ import httpx
 import structlog
 
 from aidomaincontext.connectors.base import register_connector
+from aidomaincontext.connectors.retry import with_backoff
 from aidomaincontext.schemas.documents import DocumentBase
 
 logger = structlog.get_logger()
@@ -215,10 +216,12 @@ class GmailConnector:
         cursor: dict,
     ) -> DocumentBase | None:
         """Fetch and parse a single message; updates cursor['last_history_id'] in-place."""
-        resp = await client.get(
-            f"{_GMAIL_API}/users/me/messages/{message_id}",
-            headers=headers,
-            params={"format": "full"},
+        resp = await with_backoff(
+            lambda: client.get(
+                f"{_GMAIL_API}/users/me/messages/{message_id}",
+                headers=headers,
+                params={"format": "full"},
+            )
         )
         if resp.status_code == 404:
             return None
@@ -271,10 +274,10 @@ class GmailConnector:
             if page_token:
                 params["pageToken"] = page_token
 
-            resp = await client.get(
-                f"{_GMAIL_API}/users/me/messages",
-                headers=headers,
-                params=params,
+            resp = await with_backoff(
+                lambda p=params: client.get(
+                    f"{_GMAIL_API}/users/me/messages", headers=headers, params=p
+                )
             )
             resp.raise_for_status()
             data = resp.json()
@@ -308,10 +311,10 @@ class GmailConnector:
             if page_token:
                 params["pageToken"] = page_token
 
-            resp = await client.get(
-                f"{_GMAIL_API}/users/me/history",
-                headers=headers,
-                params=params,
+            resp = await with_backoff(
+                lambda p=params: client.get(
+                    f"{_GMAIL_API}/users/me/history", headers=headers, params=p
+                )
             )
 
             # 404 means historyId is too old — fall back to a full sync

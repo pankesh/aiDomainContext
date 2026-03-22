@@ -9,6 +9,7 @@ import httpx
 import structlog
 
 from aidomaincontext.connectors.base import register_connector
+from aidomaincontext.connectors.retry import with_backoff
 from aidomaincontext.schemas.documents import DocumentBase
 
 logger = structlog.get_logger()
@@ -211,8 +212,8 @@ class GoogleDriveConnector:
         # Capture a changes cursor snapshot upfront so every yielded document
         # carries the token and the sync engine can resume incrementally if
         # the full sync is interrupted.
-        token_resp = await client.get(
-            f"{_DRIVE_API}/changes/startPageToken", headers=headers
+        token_resp = await with_backoff(
+            lambda: client.get(f"{_DRIVE_API}/changes/startPageToken", headers=headers)
         )
         token_resp.raise_for_status()
         new_cursor["changes_page_token"] = token_resp.json()["startPageToken"]
@@ -227,7 +228,9 @@ class GoogleDriveConnector:
             if page_token:
                 params["pageToken"] = page_token
 
-            resp = await client.get(f"{_DRIVE_API}/files", headers=headers, params=params)
+            resp = await with_backoff(
+                lambda p=params: client.get(f"{_DRIVE_API}/files", headers=headers, params=p)
+            )
             resp.raise_for_status()
             data = resp.json()
 
@@ -273,7 +276,9 @@ class GoogleDriveConnector:
                 "fields": "changes(file(id,name,mimeType,webViewLink,owners,modifiedTime),removed),newStartPageToken,nextPageToken",
             }
 
-            resp = await client.get(f"{_DRIVE_API}/changes", headers=headers, params=params)
+            resp = await with_backoff(
+                lambda p=params: client.get(f"{_DRIVE_API}/changes", headers=headers, params=p)
+            )
 
             if resp.status_code == 410:
                 # Stale cursor — fall back to full sync

@@ -4,11 +4,12 @@ import uuid
 import redis.asyncio as aioredis
 import structlog
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aidomaincontext.config import settings
-from aidomaincontext.generation.llm import generate_answer
+from aidomaincontext.generation.llm import generate_answer, generate_answer_stream
 from aidomaincontext.models.database import get_session
 from aidomaincontext.models.document import Document
 from aidomaincontext.retrieval.hybrid_search import hybrid_search
@@ -63,7 +64,16 @@ async def _enrich_chunks_with_doc_info(
 
 @router.post("/search", response_model=SearchResult)
 async def search(request: SearchRequest, session: AsyncSession = Depends(get_session)):
-    chunks = await hybrid_search(session, request.query, request.top_k)
+    chunks = await hybrid_search(
+        session,
+        request.query,
+        request.top_k,
+        connector_id=request.connector_id,
+        source_type=request.source_type,
+        author=request.author,
+        date_from=request.date_from,
+        date_to=request.date_to,
+    )
     chunks = await _enrich_chunks_with_doc_info(session, chunks)
 
     return SearchResult(
@@ -104,3 +114,16 @@ async def chat(request: ChatRequest, session: AsyncSession = Depends(get_session
 
     logger.info("chat.turn", session_id=session_id, history_turns=len(history))
     return ChatResponse(answer=answer, citations=citations, query=request.query, session_id=session_id)
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest, session: AsyncSession = Depends(get_session)):
+    """Stream a chat answer as Server-Sent Events. Each token is sent as `data: <token>\n\n`."""
+    chunks = await hybrid_search(session, request.query, request.top_k)
+    chunks = await _enrich_chunks_with_doc_info(session, chunks)
+
+    async def token_generator():
+        async for token in generate_answer_stream(request.query, chunks):
+            yield f"data: {token}\n\n"
+
+    return StreamingResponse(token_generator(), media_type="text/event-stream")

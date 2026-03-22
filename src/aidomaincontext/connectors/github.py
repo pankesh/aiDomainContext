@@ -11,6 +11,7 @@ import httpx
 import structlog
 
 from aidomaincontext.connectors.base import register_connector
+from aidomaincontext.connectors.retry import with_backoff
 from aidomaincontext.schemas.documents import DocumentBase
 
 logger = structlog.get_logger()
@@ -56,7 +57,9 @@ async def _paginated_get(
     while next_url is not None:
         retries = 0
         while True:
-            resp = await client.get(next_url, params=params if next_url == url else None)
+            cur_url = next_url
+            cur_params = params if cur_url == url else None
+            resp = await with_backoff(lambda u=cur_url, p=cur_params: client.get(u, params=p))
 
             if resp.status_code == 403 and retries < _MAX_RATE_LIMIT_RETRIES:
                 await _handle_rate_limit(resp)

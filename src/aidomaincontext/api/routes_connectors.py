@@ -63,6 +63,31 @@ async def create_connector(
     return connector
 
 
+@router.post("/connectors/sync-all", response_model=list[SyncJobResponse], status_code=202)
+async def trigger_sync_all(
+    sync_type: str = Query(default="incremental"),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await session.execute(
+        select(Connector).where(Connector.enabled.is_(True))
+    )
+    connectors = result.scalars().all()
+
+    jobs: list[SyncJob] = []
+    for connector in connectors:
+        job = SyncJob(connector_id=connector.id, sync_type=sync_type, status="pending")
+        session.add(job)
+        jobs.append(job)
+
+    await session.commit()
+    for job in jobs:
+        await session.refresh(job)
+        asyncio.create_task(run_sync_job(job.connector_id, sync_type=sync_type))
+
+    logger.info("sync_all_triggered", connector_count=len(jobs), sync_type=sync_type)
+    return jobs
+
+
 @router.get("/connectors/{connector_id}", response_model=ConnectorResponse)
 async def get_connector_by_id(
     connector_id: UUID,

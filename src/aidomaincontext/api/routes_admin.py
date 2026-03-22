@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends
+from uuid import UUID
+
+import structlog
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -7,6 +10,7 @@ from aidomaincontext.models.database import get_session
 from aidomaincontext.models.document import Document
 from aidomaincontext.schemas.documents import DocumentResponse
 
+logger = structlog.get_logger()
 router = APIRouter(prefix="/api/v1", tags=["admin"])
 
 
@@ -23,6 +27,19 @@ async def stats(session: AsyncSession = Depends(get_session)):
         "documents": doc_count,
         "chunks": chunk_count,
     }
+
+
+@router.delete("/documents/{document_id}", status_code=204)
+async def delete_document(
+    document_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    doc = await session.get(Document, document_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await session.delete(doc)
+    await session.commit()
+    logger.info("document_deleted", document_id=str(document_id))
 
 
 @router.get("/documents", response_model=list[DocumentResponse])

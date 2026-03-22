@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
 
 import httpx
 import structlog
 
 from aidomaincontext.connectors.base import register_connector
+from aidomaincontext.connectors.retry import with_backoff
 from aidomaincontext.schemas.documents import DocumentBase
 
 logger = structlog.get_logger()
@@ -30,28 +30,16 @@ async def _slack_request(
     url = f"{SLACK_BASE_URL}/{method}"
     headers = {"Authorization": f"Bearer {token}"}
 
-    while True:
-        resp = await client.get(url, headers=headers, params=params or {})
+    resp = await with_backoff(lambda: client.get(url, headers=headers, params=params or {}))
+    resp.raise_for_status()
+    data = resp.json()
 
-        if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "5"))
-            logger.warning(
-                "slack_rate_limited",
-                method=method,
-                retry_after=retry_after,
-            )
-            await asyncio.sleep(retry_after)
-            continue
+    if not data.get("ok"):
+        error = data.get("error", "unknown_error")
+        logger.error("slack_api_error", method=method, error=error)
+        raise RuntimeError(f"Slack API error: {error}")
 
-        resp.raise_for_status()
-        data = resp.json()
-
-        if not data.get("ok"):
-            error = data.get("error", "unknown_error")
-            logger.error("slack_api_error", method=method, error=error)
-            raise RuntimeError(f"Slack API error: {error}")
-
-        return data
+    return data
 
 
 def _message_to_document(

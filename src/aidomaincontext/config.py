@@ -45,5 +45,9 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
     oauth_redirect_uri: str = "http://localhost:8000/api/v1/oauth/google/callback"
 
+    # Webhook signature verification
+    slack_signing_secret: str = ""
+    github_webhook_secret: str = ""
+
 
 settings = Settings()

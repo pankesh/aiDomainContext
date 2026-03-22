@@ -1,4 +1,8 @@
 import asyncio
+import hashlib
+import hmac
+import json
+import time
 from uuid import UUID
 
 import structlog
@@ -6,6 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from aidomaincontext.config import settings
 from aidomaincontext.connectors.base import get_connector
 from aidomaincontext.ingestion.pipeline import ingest_document
 from aidomaincontext.security import decrypt_config
@@ -15,6 +20,56 @@ from aidomaincontext.models.database import get_session
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/api/v1", tags=["webhooks"])
+
+_SLACK_TIMESTAMP_TOLERANCE_SECONDS = 300  # 5 minutes — reject replays
+
+
+def _verify_slack_signature(
+    body: bytes,
+    timestamp: str | None,
+    signature: str | None,
+    signing_secret: str,
+) -> None:
+    """Raise HTTP 401 if the Slack signature is missing or invalid."""
+    if not signing_secret:
+        raise HTTPException(status_code=500, detail="Slack signing secret not configured")
+
+    if not timestamp or not signature:
+        raise HTTPException(status_code=401, detail="Missing Slack signature headers")
+
+    # Reject requests older than the tolerance window (replay protection)
+    try:
+        ts = int(timestamp)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid timestamp")
+    if abs(time.time() - ts) > _SLACK_TIMESTAMP_TOLERANCE_SECONDS:
+        raise HTTPException(status_code=401, detail="Request timestamp too old")
+
+    base_string = f"v0:{timestamp}:{body.decode('utf-8')}"
+    expected = "v0=" + hmac.new(
+        signing_secret.encode(), base_string.encode(), hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=401, detail="Invalid Slack signature")
+
+
+def _verify_github_signature(
+    body: bytes,
+    signature: str | None,
+    webhook_secret: str,
+) -> None:
+    """Raise HTTP 401 if the GitHub signature is missing or invalid."""
+    if not webhook_secret:
+        raise HTTPException(status_code=500, detail="GitHub webhook secret not configured")
+
+    if not signature:
+        raise HTTPException(status_code=401, detail="Missing X-Hub-Signature-256 header")
+
+    expected = "sha256=" + hmac.new(
+        webhook_secret.encode(), body, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(expected, signature):
+        raise HTTPException(status_code=401, detail="Invalid GitHub signature")
 
 
 async def _process_webhook_documents(connector: Connector, documents: list) -> None:
@@ -57,8 +112,20 @@ async def handle_slack_webhook(
     request: Request,
     session: AsyncSession = Depends(get_session),
     x_connector_id: str | None = Header(default=None),
+    x_slack_request_timestamp: str | None = Header(default=None),
+    x_slack_signature: str | None = Header(default=None),
 ):
-    payload = await request.json()
+    body = await request.body()
+
+    # Verify signature before parsing payload
+    _verify_slack_signature(
+        body,
+        x_slack_request_timestamp,
+        x_slack_signature,
+        settings.slack_signing_secret,
+    )
+
+    payload = json.loads(body)
 
     # Slack URL verification challenge
     if payload.get("type") == "url_verification":
@@ -112,8 +179,14 @@ async def handle_github_webhook(
     session: AsyncSession = Depends(get_session),
     x_connector_id: str | None = Header(default=None),
     x_github_event: str | None = Header(default=None),
+    x_hub_signature_256: str | None = Header(default=None),
 ):
-    payload = await request.json()
+    body = await request.body()
+
+    # Verify signature before processing
+    _verify_github_signature(body, x_hub_signature_256, settings.github_webhook_secret)
+
+    payload = json.loads(body)
 
     connector = await _resolve_connector(session, x_connector_id)
 

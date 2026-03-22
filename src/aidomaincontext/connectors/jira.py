@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
@@ -182,8 +183,10 @@ class JiraConnector:
     def _build_jql(self, project_keys: list[str], last_sync_at: str | None) -> str:
         conditions: list[str] = []
         if project_keys:
-            keys_str = ", ".join(f'"{k}"' for k in project_keys)
-            conditions.append(f"project in ({keys_str})")
+            safe_keys = [k for k in project_keys if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,9}", k)]
+            if safe_keys:
+                keys_str = ", ".join(f'"{k}"' for k in safe_keys)
+                conditions.append(f"project in ({keys_str})")
         if last_sync_at:
             # JQL expects format: "YYYY-MM-DD HH:MM"
             try:

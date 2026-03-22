@@ -447,6 +447,16 @@ class TestListSyncJobs:
 # ===========================================================================
 
 
+@pytest.fixture(autouse=True)
+def _bypass_webhook_signature_verification():
+    """Patch out HMAC verification so routing tests are not coupled to signature logic."""
+    with (
+        patch("aidomaincontext.api.routes_webhooks._verify_slack_signature"),
+        patch("aidomaincontext.api.routes_webhooks._verify_github_signature"),
+    ):
+        yield
+
+
 class TestResolveConnector:
     """
     _resolve_connector is an internal async helper.  We test its behavior

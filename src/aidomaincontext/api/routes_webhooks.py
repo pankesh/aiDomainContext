@@ -32,7 +32,7 @@ def _verify_slack_signature(
 ) -> None:
     """Raise HTTP 401 if the Slack signature is missing or invalid."""
     if not signing_secret:
-        return  # verification disabled — no secret configured
+        raise HTTPException(status_code=500, detail="Slack signing secret not configured")
 
     if not timestamp or not signature:
         raise HTTPException(status_code=401, detail="Missing Slack signature headers")
@@ -60,7 +60,7 @@ def _verify_github_signature(
 ) -> None:
     """Raise HTTP 401 if the GitHub signature is missing or invalid."""
     if not webhook_secret:
-        return  # verification disabled — no secret configured
+        raise HTTPException(status_code=500, detail="GitHub webhook secret not configured")
 
     if not signature:
         raise HTTPException(status_code=401, detail="Missing X-Hub-Signature-256 header")

@@ -1,6 +1,6 @@
 # aiDomainContext
 
-Enterprise RAG system that ingests data from multiple sources (Slack, GitHub, Gmail, Google Drive, file uploads) into a unified vector store, enabling semantic search and AI-powered Q&A across all company knowledge.
+Enterprise RAG system that ingests data from multiple sources (Slack, GitHub, Gmail, Google Drive, Yahoo Mail, Jira, file uploads) into a unified vector store, enabling semantic search and AI-powered Q&A across all company knowledge.
 
 ## Requirements
 
@@ -116,7 +116,7 @@ GENERATION_MODEL=claude-sonnet-4-6
 ```
 src/aidomaincontext/
 ├── api/           # FastAPI route handlers
-├── connectors/    # Data source connectors (Slack, GitHub, Gmail, Google Drive, file upload)
+├── connectors/    # Data source connectors (Slack, GitHub, Gmail, Google Drive, Yahoo Mail, Jira, file upload)
 ├── ingestion/     # Pipeline: parse → chunk → embed → upsert
 ├── retrieval/     # Hybrid search (vector + BM25 + RRF fusion)
 ├── generation/    # Claude LLM wrapper with citation support
@@ -188,6 +188,71 @@ curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_t
 # Gmail uses the History API; Drive uses the Changes API
 curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=incremental"
 ```
+
+---
+
+## Yahoo Mail Connector Setup
+
+Yahoo Mail uses OAuth 2.0 with Yahoo's authorization server. You need a Yahoo Developer app to obtain OAuth credentials.
+
+### 1. Create a Yahoo Developer app
+
+1. Go to [Yahoo Developer Console](https://developer.yahoo.com/apps/) and sign in
+2. Click **Create an App**
+3. Fill in the app details:
+   - **Application Name**: your app name
+   - **Application Type**: **Web Application**
+   - **Callback Domain**: `localhost`
+4. Under **API Permissions**, enable **Mail** → select **Read**
+5. Click **Create App**
+6. Copy the **Client ID (Consumer Key)** and **Client Secret (Consumer Secret)**
+
+### 2. Configure the redirect URI
+
+In your app settings, add the redirect URI:
+```
+http://localhost:8000/api/v1/oauth/yahoo/callback
+```
+
+### 3. Add credentials to `.env`
+
+```bash
+YAHOO_OAUTH_CLIENT_ID=<your_client_id>
+YAHOO_OAUTH_CLIENT_SECRET=<your_client_secret>
+YAHOO_OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/oauth/yahoo/callback
+```
+
+### 4. Connect an account
+
+Visit in your browser:
+
+```
+http://localhost:8000/api/v1/oauth/yahoo/authorize?connector_name=My+Yahoo+Mail
+```
+
+Complete the Yahoo consent screen. You will be redirected back and receive a `201` JSON response containing the `connector_id`.
+
+### 5. Trigger a sync
+
+```bash
+# Full sync (first run — fetches entire inbox)
+curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=full"
+
+# Incremental sync (subsequent runs — only messages since last sync)
+curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=incremental"
+```
+
+Incremental syncs use a `last_sync_at` timestamp cursor stored on the connector record. Only messages received after the previous sync are fetched.
+
+### How it works
+
+| Field | Value |
+|---|---|
+| `connector_type` | `yahoo_mail` |
+| `source_type` | `yahoo_message` |
+| `source_id` format | `yahoo_mail:<email>:<message_id>` |
+| Folder synced | Inbox |
+| Webhook support | No (poll-only) |
 
 ---
 

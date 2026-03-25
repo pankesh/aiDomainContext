@@ -193,56 +193,50 @@ curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_t
 
 ## Yahoo Mail Connector Setup
 
-Yahoo Mail uses OAuth 2.0 with Yahoo's authorization server. You need a Yahoo Developer app to obtain OAuth credentials.
+Yahoo Mail uses **IMAP with an app-specific password**. Yahoo's Mail REST API is not available for third-party developers, so no developer app or OAuth flow is needed.
 
-### 1. Create a Yahoo Developer app
+### 1. Enable IMAP in Yahoo Mail
 
-1. Go to [Yahoo Developer Console](https://developer.yahoo.com/apps/) and sign in
-2. Click **Create an App**
-3. Fill in the app details:
-   - **Application Name**: your app name
-   - **Application Type**: **Web Application**
-   - **Callback Domain**: `localhost`
-4. Under **API Permissions**, enable **Mail** → select **Read**
-5. Click **Create App**
-6. Copy the **Client ID (Consumer Key)** and **Client Secret (Consumer Secret)**
+1. Sign in to Yahoo Mail → **Settings** → **More Settings** → **Mailboxes**
+2. Select your mailbox and ensure **IMAP** is enabled
 
-### 2. Configure the redirect URI
+### 2. Generate an app-specific password
 
-In your app settings, add the redirect URI:
-```
-http://localhost:8000/api/v1/oauth/yahoo/callback
-```
+1. Go to your [Yahoo Account Security](https://login.yahoo.com/account/security) page
+2. Scroll to **App passwords** → click **Generate app password**
+3. Enter a name (e.g. `aiDomainContext`) and click **Generate**
+4. Copy the 16-character password (e.g. `xxxx xxxx xxxx xxxx`)
 
-### 3. Add credentials to `.env`
+> No changes to `.env` are required — credentials are stored encrypted in the database.
+
+### 3. Connect an account
 
 ```bash
-YAHOO_OAUTH_CLIENT_ID=<your_client_id>
-YAHOO_OAUTH_CLIENT_SECRET=<your_client_secret>
-YAHOO_OAUTH_REDIRECT_URI=http://localhost:8000/api/v1/oauth/yahoo/callback
+curl -X POST http://localhost:8000/api/v1/connectors \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My Yahoo Mail",
+    "connector_type": "yahoo_mail",
+    "config": {
+      "username": "you@yahoo.com",
+      "app_password": "xxxx xxxx xxxx xxxx",
+      "folder": "INBOX"
+    },
+    "enabled": true
+  }'
 ```
 
-### 4. Connect an account
-
-Visit in your browser:
-
-```
-http://localhost:8000/api/v1/oauth/yahoo/authorize?connector_name=My+Yahoo+Mail
-```
-
-Complete the Yahoo consent screen. You will be redirected back and receive a `201` JSON response containing the `connector_id`.
-
-### 5. Trigger a sync
+### 4. Trigger a sync
 
 ```bash
 # Full sync (first run — fetches entire inbox)
 curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=full"
 
-# Incremental sync (subsequent runs — only messages since last sync)
+# Incremental sync (subsequent runs — only new messages since last sync)
 curl -X POST "http://localhost:8000/api/v1/connectors/<connector_id>/sync?sync_type=incremental"
 ```
 
-Incremental syncs use a `last_sync_at` timestamp cursor stored on the connector record. Only messages received after the previous sync are fetched.
+Incremental syncs use a `last_uid` IMAP UID cursor. Only messages with a higher UID than the last seen are fetched.
 
 ### How it works
 
@@ -250,8 +244,9 @@ Incremental syncs use a `last_sync_at` timestamp cursor stored on the connector 
 |---|---|
 | `connector_type` | `yahoo_mail` |
 | `source_type` | `yahoo_message` |
-| `source_id` format | `yahoo_mail:<email>:<message_id>` |
-| Folder synced | Inbox |
+| `source_id` format | `yahoo_mail:<email>:<imap_uid>` |
+| Protocol | IMAP over SSL (`imap.mail.yahoo.com:993`) |
+| Folder synced | `INBOX` (configurable via `folder` config key) |
 | Webhook support | No (poll-only) |
 
 ---

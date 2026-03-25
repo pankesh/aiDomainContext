@@ -49,10 +49,6 @@ class Settings(BaseSettings):
     slack_signing_secret: str = ""
     github_webhook_secret: str = ""
 
-    # Yahoo OAuth (Yahoo Mail connector)
-    yahoo_oauth_client_id: str = ""
-    yahoo_oauth_client_secret: str = ""
-    yahoo_oauth_redirect_uri: str = "http://localhost:8000/api/v1/oauth/yahoo/callback"
 
 
 settings = Settings()

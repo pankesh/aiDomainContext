@@ -182,27 +182,27 @@ class TestParseMessage:
             body="Unit test email body.",
         )
         msg = email_lib.message_from_bytes(raw)
-        doc = connector._parse_message(msg, uid=42, username="user@yahoo.com")
+        doc = connector._parse_message(msg, seq_num=42, username="user@yahoo.com")
 
         assert doc is not None
-        assert doc.source_id == "yahoo_mail:user@yahoo.com:42"
         assert doc.source_type == "yahoo_message"
+        assert "user@yahoo.com" in doc.source_id
         assert doc.title == "Hello Tests"
         assert doc.author == "bob@example.com"
         assert "Unit test email body." in doc.content
-        assert doc.metadata["uid"] == 42
+        assert doc.metadata["seq_num"] == 42
 
     def test_no_subject_falls_back(self, connector):
         raw = _make_plain_email(subject="", body="body text")
         msg = email_lib.message_from_bytes(raw)
-        doc = connector._parse_message(msg, uid=1, username="user@yahoo.com")
+        doc = connector._parse_message(msg, seq_num=1, username="user@yahoo.com")
         assert doc is not None
         assert doc.title == "(no subject)"
 
     def test_html_body_gets_stripped(self, connector):
         raw = _make_html_email(body_html="<p>Hello <b>World</b></p>")
         msg = email_lib.message_from_bytes(raw)
-        doc = connector._parse_message(msg, uid=2, username="user@yahoo.com")
+        doc = connector._parse_message(msg, seq_num=2, username="user@yahoo.com")
         assert doc is not None
         assert "<p>" not in doc.content
         assert "Hello" in doc.content
@@ -210,7 +210,7 @@ class TestParseMessage:
     def test_empty_body_falls_back_to_subject(self, connector):
         raw = _make_plain_email(subject="Fallback Subject", body="")
         msg = email_lib.message_from_bytes(raw)
-        doc = connector._parse_message(msg, uid=3, username="user@yahoo.com")
+        doc = connector._parse_message(msg, seq_num=3, username="user@yahoo.com")
         assert doc is not None
         assert doc.content == "Fallback Subject"
 

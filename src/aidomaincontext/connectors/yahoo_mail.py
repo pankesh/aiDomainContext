@@ -103,16 +103,19 @@ class YahooMailConnector:
 
     async def validate_credentials(self, config: dict) -> bool:
         """Attempt an IMAP login to verify credentials."""
+        import asyncio  # noqa: PLC0415
+
         username = config.get("username", "")
         app_password = config.get("app_password", "")
         if not username or not app_password:
             return False
         try:
-            client = aioimaplib.IMAP4_SSL(_IMAP_HOST, _IMAP_PORT)
-            await client.wait_hello_from_server()
-            resp = await client.login(username, app_password)
-            await client.logout()
-            return resp.result == "OK"
+            async with asyncio.timeout(15):
+                client = aioimaplib.IMAP4_SSL(_IMAP_HOST, _IMAP_PORT)
+                await client.wait_hello_from_server()
+                resp = await client.login(username, app_password)
+                await client.logout()
+                return resp.result == "OK"
         except Exception:
             logger.exception("yahoo_mail.validate_credentials_failed")
             return False
@@ -123,7 +126,7 @@ class YahooMailConnector:
         username = config.get("username", "")
         app_password = config.get("app_password", "")
         folder = config.get("folder", _DEFAULT_FOLDER)
-        last_uid: int = (cursor or {}).get("last_uid", 0)
+        last_sync_at: str | None = (cursor or {}).get("last_sync_at")
 
         client = aioimaplib.IMAP4_SSL(_IMAP_HOST, _IMAP_PORT)
         await client.wait_hello_from_server()
@@ -131,34 +134,44 @@ class YahooMailConnector:
         try:
             await client.select(folder)
 
-            # Fetch UIDs greater than last seen
-            search_criterion = f"UID {last_uid + 1}:*" if last_uid else "ALL"
-            _, data = await client.uid("search", search_criterion)
-            uid_list = [int(u) for u in data[0].split() if u.strip().isdigit()]
+            # Build search criterion — SINCE <date> for incremental, ALL for full
+            if last_sync_at:
+                try:
+                    dt = datetime.fromisoformat(last_sync_at.replace("Z", "+00:00"))
+                    # IMAP SINCE uses DD-Mon-YYYY format
+                    since_str = dt.strftime("%d-%b-%Y")
+                    search_criterion = f'SINCE "{since_str}"'
+                except ValueError:
+                    search_criterion = "ALL"
+            else:
+                search_criterion = "ALL"
+
+            _, data = await client.search(search_criterion)
+            seq_list = [s for s in data[0].split() if s.strip().isdigit()]
 
             new_cursor: dict = dict(cursor or {})
+            new_cursor["last_sync_at"] = datetime.now(timezone.utc).isoformat()
 
             # Process in batches
-            for i in range(0, len(uid_list), _FETCH_BATCH_SIZE):
-                batch = uid_list[i : i + _FETCH_BATCH_SIZE]
-                uid_range = ",".join(str(u) for u in batch)
+            for i in range(0, len(seq_list), _FETCH_BATCH_SIZE):
+                batch = seq_list[i : i + _FETCH_BATCH_SIZE]
+                seq_range = ",".join(batch)
 
-                _, msg_data = await client.uid("fetch", uid_range, "(RFC822)")
+                _, msg_data = await client.fetch(seq_range, "(RFC822)")
 
-                for j in range(0, len(msg_data), 2):
-                    raw = msg_data[j]
-                    if not isinstance(raw, bytes):
+                seq_num = int(batch[0])
+                for item in msg_data:
+                    if not isinstance(item, bytes):
                         continue
                     try:
-                        msg = email.message_from_bytes(raw)
-                        uid = batch[j // 2]
-                        doc = self._parse_message(msg, uid, username)
+                        msg = email.message_from_bytes(item)
+                        doc = self._parse_message(msg, seq_num, username)
                         if doc:
-                            if uid > new_cursor.get("last_uid", 0):
-                                new_cursor["last_uid"] = uid
                             yield doc, {**new_cursor}
+                        seq_num += 1
                     except Exception:
-                        logger.exception("yahoo_mail.parse_failed", uid=batch[j // 2] if j // 2 < len(batch) else "?")
+                        logger.exception("yahoo_mail.parse_failed", seq=seq_num)
+                        seq_num += 1
         finally:
             try:
                 await client.logout()
@@ -172,23 +185,26 @@ class YahooMailConnector:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _parse_message(self, msg: EmailMessage, uid: int, username: str) -> DocumentBase | None:
+    def _parse_message(self, msg: EmailMessage, seq_num: int, username: str) -> DocumentBase | None:
         subject = _decode_header_value(msg.get("Subject", "") or "") or "(no subject)"
         from_header = _decode_header_value(msg.get("From", "") or "")
         date_header = msg.get("Date", "")
-        message_id = msg.get("Message-ID", f"uid:{uid}").strip()
+        message_id = msg.get("Message-ID", f"seq:{seq_num}").strip()
 
         body = _extract_body(msg)
 
+        # Use Message-ID as the stable unique key for source_id
+        stable_id = message_id.strip("<>") or f"seq:{seq_num}"
+
         return DocumentBase(
-            source_id=f"yahoo_mail:{username}:{uid}",
+            source_id=f"yahoo_mail:{username}:{stable_id}",
             source_type="yahoo_message",
             title=subject,
             content=body or subject,
             url="https://mail.yahoo.com/",
             author=from_header or None,
             metadata={
-                "uid": uid,
+                "seq_num": seq_num,
                 "message_id": message_id,
                 "date": date_header,
             },

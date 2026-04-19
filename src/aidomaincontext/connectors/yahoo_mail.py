@@ -146,8 +146,9 @@ class YahooMailConnector:
             else:
                 search_criterion = "ALL"
 
-            _, data = await client.search(search_criterion)
-            seq_list = [s for s in data[0].split() if s.strip().isdigit()]
+            _, data = await client.search(search_criterion, charset=None)
+            raw = data[0] if isinstance(data[0], str) else data[0].decode()
+            seq_list = [s for s in raw.split() if s.strip().isdigit()]
 
             new_cursor: dict = dict(cursor or {})
             new_cursor["last_sync_at"] = datetime.now(timezone.utc).isoformat()

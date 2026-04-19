@@ -1,2 +1,2 @@
 # Import connectors so they self-register via @register_connector
-from aidomaincontext.connectors import file_upload, github, gmail, google_drive, jira, slack  # noqa: F401
+from aidomaincontext.connectors import file_upload, github, gmail, google_drive, jira, slack, yahoo_mail  # noqa: F401

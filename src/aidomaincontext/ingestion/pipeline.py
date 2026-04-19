@@ -2,7 +2,7 @@ import hashlib
 import uuid
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from aidomaincontext.ingestion.chunker import chunk_text
@@ -43,9 +43,8 @@ async def ingest_document(
         return doc
 
     if doc:
-        # Delete old chunks for re-ingestion
-        for chunk in doc.chunks:
-            await session.delete(chunk)
+        # Delete old chunks for re-ingestion (bulk delete avoids lazy load)
+        await session.execute(delete(Chunk).where(Chunk.document_id == doc.id))
         doc.content = content
         doc.content_hash = content_hash
         doc.title = doc_data.title

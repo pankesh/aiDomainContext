@@ -8,6 +8,7 @@ from aidomaincontext.api.routes_oauth import router as oauth_router
 from aidomaincontext.api.routes_search import router as search_router
 from aidomaincontext.api.routes_upload import router as upload_router
 from aidomaincontext.api.routes_webhooks import router as webhooks_router
+from aidomaincontext.config import settings
 
 structlog.configure(
     processors=[
@@ -17,6 +18,11 @@ structlog.configure(
         structlog.dev.ConsoleRenderer(),
     ],
 )
+
+if not settings.anthropic_api_key:
+    raise RuntimeError(
+        "ANTHROPIC_API_KEY is not set. Add it to your .env file and restart the server."
+    )
 
 app = FastAPI(
     title="aiDomainContext",

@@ -50,4 +50,5 @@ class Settings(BaseSettings):
     github_webhook_secret: str = ""
 
 
+
 settings = Settings()

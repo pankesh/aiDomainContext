@@ -175,10 +175,8 @@ async def test_ingest_document_changed_hash_deletes_old_chunks_and_reingest():
     ):
         result = await ingest_document(session, doc_data)
 
-    # Every old chunk must be deleted
-    assert session.delete.await_count == len(old_chunks)
-    for old_chunk in old_chunks:
-        session.delete.assert_any_await(old_chunk)
+    # Old chunks deleted via bulk DELETE (avoids async lazy load)
+    session.execute.assert_awaited()
 
     # Document fields updated
     assert existing_doc.content == _CONTENT

@@ -17,3 +17,8 @@ venv/
 .coverage
 htmlcov/
 uv.lock
+
+# Local tooling (Claude Code / claude-flow / MCP)
+.claude/
+.claude-flow/
+.mcp.json

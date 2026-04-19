@@ -114,6 +114,14 @@ GENERATION_MODEL=claude-sonnet-4-6
 ## Architecture
 
 ```
+Data Sources → Connectors → Ingestion Pipeline → PostgreSQL (pgvector)
+                                                        ↕
+                                              Hybrid Search Engine
+                                                        ↕
+                                              Claude LLM → Chat API
+```
+
+```
 src/aidomaincontext/
 ├── api/           # FastAPI route handlers
 ├── connectors/    # Data source connectors (Slack, GitHub, Gmail, Google Drive, Yahoo Mail, Jira, file upload)
@@ -124,6 +132,126 @@ src/aidomaincontext/
 ├── schemas/       # Pydantic request/response models
 └── sync/          # Background worker + scheduler (arq + APScheduler)
 ```
+
+### Database (PostgreSQL + pgvector)
+
+Everything lives in one Postgres instance. Three core tables:
+
+**`connectors`** — one row per connected data source
+- `connector_type`: `slack`, `github`, `gmail`, `google_drive`, `yahoo_mail`, `jira`, `file_upload`
+- `config_encrypted`: credentials stored as a Fernet-encrypted JSON blob — never plaintext
+- `sync_cursor`: JSONB dict tracking "where we left off" for incremental syncs (e.g. `{"last_sync_at": "..."}`)
+- `enabled`: pause syncing without deleting the connector
+
+**`documents`** — one row per ingested piece of content (email, issue, file, Slack message, etc.)
+- `source_id` + `connector_id` form a unique key — deduplication happens here
+- `content_hash`: SHA-256 of the text — if unchanged on re-sync, the document is skipped entirely
+- `metadata_`: flexible JSONB for source-specific fields (e.g. Jira issue key, email message-id)
+
+**`chunks`** — one row per text chunk split from a document
+- `embedding`: a `Vector(768)` column — this is the pgvector column storing the 768-dim float array
+- `chunk_index`: ordering within the parent document
+- Foreign key with `ondelete=CASCADE` — deleting a document auto-deletes its chunks
+
+### Vector Store (pgvector)
+
+There is no separate vector database. **PostgreSQL itself is the vector store** via the `pgvector` extension.
+
+The `<=>` operator is cosine distance — `1 - distance` gives the similarity score:
+
+```sql
+ORDER BY c.embedding <=> CAST(:embedding AS vector)
+```
+
+**Embeddings are generated locally** using `sentence-transformers` with `BAAI/bge-base-en-v1.5` (768 dimensions). This runs in-process — no external embedding API, no per-embed cost.
+
+### Ingestion Pipeline
+
+Every sync flows through `ingestion/pipeline.py`:
+
+```
+raw content
+    → extract_text()    # unstructured: PDFs, DOCX, HTML, plain text
+    → chunk_text()      # recursive token splitter: 512 tokens, 10% overlap
+    → embed_texts()     # sentence-transformers: batches of 64 → 768-dim vectors
+    → upsert to DB      # dedup by source_id+connector_id, skip if hash unchanged
+```
+
+The chunker splits on paragraph → sentence → word boundaries to avoid cutting mid-sentence. Each chunk gets its own embedding and its own row in `chunks`.
+
+### Hybrid Search
+
+Two searches run against the `chunks` table and their results are fused:
+
+**Vector search (pgvector)** — semantic similarity
+- Embeds the query with the same local model
+- Finds chunks whose embedding is closest (cosine distance)
+- Good at: synonyms, paraphrasing, conceptual matches
+
+**BM25 search (PostgreSQL full-text)** — keyword matching
+- Uses `to_tsvector` / `plainto_tsquery` with `ts_rank_cd` scoring
+- Good at: exact terms, names, IDs, acronyms
+
+**Reciprocal Rank Fusion (RRF)** merges both ranked lists:
+```
+score = Σ  1 / (60 + rank)    # summed across each result list
+```
+A chunk ranking high in both lists scores much higher than one appearing in only one. Returns top 5 results (`rerank_top_k`).
+
+### Generation (Claude)
+
+`generation/llm.py` builds a prompt from the top-k chunks and sends it to Claude:
+
+```
+[Source 1] (from: Email Subject)
+...chunk text...
+
+[Source 2] (from: Jira Issue PROJ-123)
+...chunk text...
+
+Question: <user query>
+Answer based on context above. Cite sources using [Source N] notation.
+```
+
+Claude returns an answer with inline citations. The route parses which `[Source N]` references appear and builds a `citations` list pointing back to the original documents.
+
+Conversation history is stored in Redis under `chat:session:<uuid>` with a 2-hour sliding TTL. Only raw Q&A pairs are stored — not the RAG context — to keep Redis memory small.
+
+### Chat Request Flow
+
+```
+POST /api/v1/chat
+  → load session history from Redis
+  → hybrid_search(query)
+      → embed_query()              # local sentence-transformers model
+      → vector_search()            # pgvector cosine similarity
+      → bm25_search()              # PostgreSQL full-text search
+      → reciprocal_rank_fusion()   # merge + rerank
+  → generate_answer(query, chunks, history)
+      → build prompt with retrieved context
+      → Claude API (claude-sonnet-4-6)
+      → parse [Source N] citations
+  → save updated history to Redis
+  → return { answer, citations, session_id }
+```
+
+### Connectors
+
+Each connector implements three methods defined by `ConnectorProtocol`:
+
+| Method | Purpose |
+|---|---|
+| `validate_credentials(config)` | Test if credentials work before saving |
+| `fetch_documents(config, cursor)` | Async generator yielding `(DocumentBase, new_cursor)` |
+| `handle_webhook(payload)` | Parse push events into documents (or return `[]`) |
+
+The **cursor pattern** drives incremental sync: after each yielded document the connector returns an updated cursor dict. The worker saves it on the `Connector` record. On the next run the cursor is passed back in and only new content is fetched.
+
+### Background Jobs
+
+**arq** (Redis-backed job queue) — sync jobs are dispatched as arq tasks, picked up by a separate worker process running `run_sync_job()`. Each job creates a `sync_jobs` DB row tracking status, document count, and errors.
+
+**APScheduler** — runs inside the server process and fires periodic incremental syncs for all enabled connectors on a configurable schedule.
 
 ## Google Connector Setup (Gmail and Drive)
 
